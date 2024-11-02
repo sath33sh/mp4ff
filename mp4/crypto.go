@@ -252,11 +252,8 @@ func InitProtect(init *InitSegment, key, iv []byte, scheme string, kid UUID, pss
 		return nil, fmt.Errorf("only one stsd child supported")
 	}
 
-	if len(iv) == 8 {
-		// Convert to 16 bytes
-		iv8 := iv
-		iv = make([]byte, 16)
-		copy(iv, iv8)
+	if len(iv) != 8 && len(iv) != 16 {
+		return nil, fmt.Errorf("iv must be 8 or 16 bytes")
 	}
 
 	var err error
@@ -277,7 +274,7 @@ func InitProtect(init *InitSegment, key, iv []byte, scheme string, kid UUID, pss
 			}
 			switch scheme {
 			case "cenc":
-				ipd.Tenc = &TencBox{Version: 0, DefaultIsProtected: 1, DefaultPerSampleIVSize: 16, DefaultKID: kid}
+				ipd.Tenc = &TencBox{Version: 0, DefaultIsProtected: 1, DefaultPerSampleIVSize: byte(len(iv)), DefaultKID: kid}
 			case "cbcs":
 				ipd.Tenc = &TencBox{Version: 1, DefaultCryptByteBlock: 1, DefaultSkipByteBlock: 9,
 					DefaultIsProtected: 1, DefaultPerSampleIVSize: 0, DefaultKID: kid,
@@ -297,7 +294,7 @@ func InitProtect(init *InitSegment, key, iv []byte, scheme string, kid UUID, pss
 		se.AddChild(&sinf)
 		switch scheme {
 		case "cenc":
-			ipd.Tenc = &TencBox{Version: 0, DefaultIsProtected: 1, DefaultPerSampleIVSize: 16, DefaultKID: kid}
+			ipd.Tenc = &TencBox{Version: 0, DefaultIsProtected: 1, DefaultPerSampleIVSize: byte(len(iv)), DefaultKID: kid}
 		case "cbcs":
 			ipd.Tenc = &TencBox{Version: 1, DefaultCryptByteBlock: 0, DefaultSkipByteBlock: 0,
 				DefaultIsProtected: 1, DefaultPerSampleIVSize: 0, DefaultKID: kid,
@@ -359,15 +356,8 @@ func getAVCProtFunc(avcC *AvcCBox) (ProtectionRangeFunc, error) {
 }
 
 func EncryptFragment(f *Fragment, key, iv []byte, ipd *InitProtectData) error {
-
-	if len(iv) == 8 {
-		// Convert to 16 bytes
-		iv8 := iv
-		iv = make([]byte, 16)
-		copy(iv, iv8)
-	}
-	if len(iv) != 16 {
-		return fmt.Errorf("iv must be 16 bytes")
+	if len(iv) != 8 && len(iv) != 16 {
+		return fmt.Errorf("iv must be 8 or 16 bytes")
 	}
 	if len(f.Moof.Trafs) != 1 {
 		return fmt.Errorf("only one traf supported")
@@ -605,16 +595,21 @@ func decryptSamplesInPlace(schemeType string, samples []FullSample, key []byte, 
 	// Saio tells where the IV starts relative to moof start
 	// It typically ends up inside senc (16 bytes after start)
 
-	iv := make([]byte, 16)
+	ivSize := tenc.DefaultPerSampleIVSize
+	if ivSize != senc.perSampleIVSize {
+		// Override IV size from tenc
+		ivSize = senc.perSampleIVSize
+	}
+	iv := make([]byte, ivSize)
 	if tenc.DefaultConstantIV != nil {
 		copy(iv, tenc.DefaultConstantIV)
 	}
 
 	for i := range samples {
 		if len(senc.IVs) == len(samples) {
-			if len(senc.IVs[i]) < 16 {
-				for i := 0; i < 16; i++ {
-					iv[i] = 0
+			if len(senc.IVs[i]) < int(ivSize) {
+				for j := 0; j < int(ivSize); j++ {
+					iv[j] = 0
 				}
 			}
 			copy(iv, senc.IVs[i])
